@@ -128,7 +128,7 @@ def run_pipeline_worker(job_id: str, req: GenerateLongVideoRequest):
         # ── Step 1: Gemini Scene Chunking & Prompts (15%) ────────────────────
         job["step"] = "gemini_prompt_generation"
         job["progress"] = 10
-        logger.info(f"[{job_id}] Starting Step 1: Gemini 3.8 Flash scene chunking...")
+        logger.info(f"[{job_id}] Starting Step 1: Gemini scene chunking & prompt generation...")
 
         scenes = split_and_generate_prompts(req.script)
         job["total_scenes"] = len(scenes)

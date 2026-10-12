@@ -1,18 +1,19 @@
 """
 modules/gemini_engine.py
-Gemini 3.8 Flash Engine: Chunks full Finnish script into scenes,
-generates 30-50 words positive scene descriptions, and assembles final FLUX.2 prompts.
+Gemini Cascading Fallback Engine: Chunks full Finnish script into scenes,
+generates 25-35 words positive scene descriptions, and assembles final FLUX.2 prompts.
 """
 
 import json
 import re
 import time
 import requests
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from config import (
     logger,
     GEMINI_API_KEY,
+    GEMINI_FALLBACK_CHAIN,
     GEMINI_MODEL,
     STYLE_PREFIX,
     STYLE_SUFFIX
@@ -20,7 +21,7 @@ from config import (
 
 SYSTEM_PROMPT = """You are the Lead Visual Director for the Finnish psychology YouTube channel MIELEN VOIMA (@Mielen_Voima).
 
-Your ONLY task is to read the provided Finnish script, divide it into chronological scenes (target 40-50 scenes, each 10-18 words spoken chunk), and write a lean, highly visual scene prompt (30 to 50 words) for each scene.
+Your ONLY task is to read the provided Finnish script, divide it into chronological scenes (target 35-45 scenes, each 10-18 words spoken chunk), and write a lean, highly visual scene prompt strictly between 25 and 35 words for each scene.
 
 CRITICAL: Style prefix, canvas background, character boilerplate, and subtitle safe-area suffix are attached automatically by the rendering code. Do NOT write them. Write ONLY the unique scene description.
 
@@ -59,7 +60,7 @@ CRITICAL: Style prefix, canvas background, character boilerplate, and subtitle s
 ═══════════════════════════════════════════════════════════════
 2. PROMPT LENGTH REQUIREMENT
 ═══════════════════════════════════════════════════════════════
-- Each 'scene_prompt' MUST be strictly between 30 to 50 words in length.
+- Each 'scene_prompt' MUST be strictly between 25 to 35 words in length.
 - Concise, positive, physical scene description specifying the figure's position, pose, and prop details.
 
 ═══════════════════════════════════════════════════════════════
@@ -123,15 +124,24 @@ def sanitize_scene_prompt(prompt: str) -> str:
     return cleaned
 
 
-def split_and_generate_prompts(script_text: str, max_retries: int = 3) -> List[Dict[str, Any]]:
+def split_and_generate_prompts(
+    script_text: str,
+    fallback_chain: Optional[List[Dict[str, Any]]] = None
+) -> List[Dict[str, Any]]:
     """
-    Calls Gemini 3.8 Flash to chunk Finnish script into scenes and generate scene prompts.
+    Calls Gemini cascading fallback chain to chunk Finnish script into scenes and generate scene prompts.
+    Tiers through models on 503, 429, timeouts, token limits, or malformed responses.
     Returns list of scene dicts with assembled full FLUX.2 image prompts.
     """
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not configured!")
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    if fallback_chain is None:
+        fallback_chain = GEMINI_FALLBACK_CHAIN
+
+    if not fallback_chain:
+        raise ValueError("GEMINI_FALLBACK_CHAIN is empty!")
+
     headers = {
         "x-goog-api-key": GEMINI_API_KEY,
         "Content-Type": "application/json",
@@ -139,8 +149,8 @@ def split_and_generate_prompts(script_text: str, max_retries: int = 3) -> List[D
 
     user_message = (
         f"Tässä on videon TÄYSI suomenkielinen käsikirjoitus. "
-        f"Jaa se kronologisesti 40-50 luonnolliseen kohtaukseen ja luo jokaiselle kohtaukselle "
-        f"tarkka 30-50 sanan kuvaus ohjeiden mukaisesti JSON-muodossa.\n\n"
+        f"Jaa se kronologisesti 35-45 luonnolliseen kohtaukseen ja luo jokaiselle kohtaukselle "
+        f"tiivis, tarkka 25-35 sanan kuvaus ohjeiden mukaisesti JSON-muodossa.\n\n"
         f"=== KÄSIKIRJOITUS ===\n{script_text.strip()}\n=== KÄSIKIRJOITUKSEN LOPPU ==="
     )
 
@@ -155,80 +165,189 @@ def split_and_generate_prompts(script_text: str, max_retries: int = 3) -> List[D
         ],
         "generationConfig": {
             "response_mime_type": "application/json",
-            "maxOutputTokens": 8192
+            "maxOutputTokens": 16384
         }
     }
 
-    logger.info("Calling Gemini 3.8 Flash for scene chunking and prompt generation...")
+    logger.info(
+        f"Starting Gemini scene chunking & prompt generation across {len(fallback_chain)} fallback tiers "
+        f"(Primary: {fallback_chain[0]['model']})..."
+    )
+
     parsed = None
 
-    for attempt in range(max_retries):
-        t0 = time.time()
-        try:
-            r = requests.post(url, headers=headers, json=payload, timeout=120)
-            elapsed = time.time() - t0
-            logger.info(f"Gemini Attempt {attempt + 1}: Status {r.status_code} in {elapsed:.2f}s")
+    for tier_idx, tier in enumerate(fallback_chain):
+        model = tier.get("model", "")
+        max_retries = tier.get("retries", 3)
+        pause = tier.get("pause", 20)
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-            if r.status_code == 200:
-                try:
-                    data = r.json()
-                except Exception as e:
-                    logger.warning(f"Gemini returned non-JSON body (attempt {attempt + 1}): {e}")
-                    time.sleep(2)
-                    continue
-                candidates = data.get("candidates")
-                if not candidates:
-                    logger.warning(
-                        f"Gemini returned no candidates (attempt {attempt + 1}): "
-                        f"{str(data)[:300]} — possibly safety-blocked. Retrying..."
-                    )
-                    time.sleep(2)
-                    continue
-                finish_reason = candidates[0].get("finishReason", "")
-                if finish_reason and finish_reason not in ("STOP", ""):
-                    logger.warning(
-                        f"Gemini finishReason={finish_reason} (attempt {attempt + 1}). Retrying..."
-                    )
-                    time.sleep(2)
-                    continue
-                try:
-                    parts = candidates[0].get("content", {}).get("parts", [])
-                    if not parts or "text" not in parts[0]:
-                        logger.warning(f"Gemini response missing text parts (attempt {attempt + 1}). Retrying...")
-                        time.sleep(2)
+        logger.info(
+            f"[Tier {tier_idx + 1}/{len(fallback_chain)}] Engaging model {model} "
+            f"(max retries: {max_retries}, pause: {pause}s)..."
+        )
+
+        for attempt in range(max_retries):
+            t0 = time.time()
+            try:
+                r = requests.post(url, headers=headers, json=payload, timeout=65)
+                elapsed = time.time() - t0
+                logger.info(f"Model {model} Attempt {attempt + 1}/{max_retries}: Status {r.status_code} in {elapsed:.2f}s")
+
+                if r.status_code == 200:
+                    try:
+                        data = r.json()
+                    except Exception as e:
+                        logger.warning(
+                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with JSONDecodeError: {e}. "
+                            f"Pausing {pause}s before retry..."
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(pause)
                         continue
+
+                    candidates = data.get("candidates")
+                    if not candidates:
+                        logger.warning(
+                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} returned no candidates: {str(data)[:300]} "
+                            f"(safety blocked or empty). Pausing {pause}s before retry..."
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(pause)
+                        continue
+
+                    candidate = candidates[0]
+                    finish_reason = candidate.get("finishReason", "")
+                    if finish_reason == "MAX_TOKENS":
+                        logger.warning(
+                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with finishReason: MAX_TOKENS "
+                            f"(output token limit exceeded). Pausing {pause}s before retry..."
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(pause)
+                        continue
+                    elif finish_reason and finish_reason not in ("STOP", ""):
+                        logger.warning(
+                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with finishReason: {finish_reason}. "
+                            f"Pausing {pause}s before retry..."
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(pause)
+                        continue
+
+                    parts = candidate.get("content", {}).get("parts", [])
+                    if not parts or "text" not in parts[0]:
+                        logger.warning(
+                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} response missing text parts. "
+                            f"Pausing {pause}s before retry..."
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(pause)
+                        continue
+
                     raw_text = parts[0]["text"].strip()
-                    # Strip markdown fences if the model wrapped JSON in ```json ... ```
                     if raw_text.startswith("```"):
                         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                         raw_text = re.sub(r"\s*```$", "", raw_text)
-                    parsed = json.loads(raw_text)
-                    if not parsed.get("scenes"):
-                        logger.warning(f"Gemini returned empty scenes list (attempt {attempt + 1}). Retrying...")
-                        parsed = None
-                        time.sleep(2)
+
+                    try:
+                        parsed_json = json.loads(raw_text)
+                    except json.JSONDecodeError as e:
+                        logger.warning(
+                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with JSONDecodeError / Malformed output: {e}. "
+                            f"Pausing {pause}s before retry..."
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(pause)
                         continue
+
+                    raw_scenes = parsed_json.get("scenes") if isinstance(parsed_json, dict) else None
+                    if not raw_scenes or not isinstance(raw_scenes, list):
+                        logger.warning(
+                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} returned empty or invalid scenes list. "
+                            f"Pausing {pause}s before retry..."
+                        )
+                        if attempt < max_retries - 1:
+                            time.sleep(pause)
+                        continue
+
+                    # Successful response and valid JSON parsing with non-empty scenes
+                    logger.info(
+                        f"Model {model} succeeded on attempt {attempt + 1}/{max_retries} "
+                        f"({len(raw_scenes)} scenes generated in {elapsed:.2f}s)."
+                    )
+                    parsed = parsed_json
                     break
-                except (json.JSONDecodeError, KeyError, IndexError, TypeError) as e:
-                    logger.warning(f"Gemini JSON parse failed (attempt {attempt + 1}): {e}. Retrying...")
-                    parsed = None
-                    time.sleep(2)
+
+                elif r.status_code == 503:
+                    logger.warning(
+                        f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with HTTP 503 (High Demand / Service Unavailable). "
+                        f"Pausing {pause}s before retry..."
+                    )
+                    if attempt < max_retries - 1:
+                        time.sleep(pause)
                     continue
-            elif r.status_code == 503:
-                logger.warning("Gemini 503 (High Demand). Retrying in 4 seconds...")
-                time.sleep(4)
-            else:
-                logger.error(f"Gemini API error {r.status_code}: {r.text[:300]}")
-                time.sleep(2)
-        except Exception as e:
-            logger.error(f"Gemini connection error: {e}")
-            time.sleep(3)
+
+                elif r.status_code == 429:
+                    logger.warning(
+                        f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with HTTP 429 (Rate Limit). "
+                        f"Pausing {pause}s before retry..."
+                    )
+                    if attempt < max_retries - 1:
+                        time.sleep(pause)
+                    continue
+
+                else:
+                    logger.warning(
+                        f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with HTTP {r.status_code}: {r.text[:300]}. "
+                        f"Pausing {pause}s before retry..."
+                    )
+                    if attempt < max_retries - 1:
+                        time.sleep(pause)
+                    continue
+
+            except requests.exceptions.Timeout as e:
+                logger.warning(
+                    f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with Read timed out (timeout=65s): {e}. "
+                    f"Pausing {pause}s before retry..."
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(pause)
+                continue
+            except requests.exceptions.RequestException as e:
+                logger.warning(
+                    f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with connection error: {e}. "
+                    f"Pausing {pause}s before retry..."
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(pause)
+                continue
+            except Exception as e:
+                logger.warning(
+                    f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with unexpected error: {e}. "
+                    f"Pausing {pause}s before retry..."
+                )
+                if attempt < max_retries - 1:
+                    time.sleep(pause)
+                continue
+
+        if parsed:
+            break
+
+        next_model = (
+            fallback_chain[tier_idx + 1]["model"]
+            if tier_idx + 1 < len(fallback_chain)
+            else "NONE (end of chain)"
+        )
+        logger.warning(
+            f"[WARNING] All retries exhausted for {model}. "
+            f"Falling back to next tier: {next_model}..."
+        )
 
     if not parsed:
-        raise RuntimeError("Failed to obtain response from Gemini 3.8 Flash after retries.")
+        raise RuntimeError("All Gemini fallback tiers exhausted")
 
     raw_scenes = parsed.get("scenes", [])
-
     if not raw_scenes:
         raise ValueError("Gemini returned empty scenes list!")
 

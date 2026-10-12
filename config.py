@@ -62,9 +62,29 @@ if not CF_ACCOUNTS:
 
 CF_MODEL = "@cf/black-forest-labs/flux-2-klein-4b"
 
-# ── Gemini API Credentials ──────────────────────────────────────────────────
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_MODEL = "gemini-3.8-flash"
+# ── Gemini API Credentials & Cascading Fallback Chain ────────────────────────
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
+GEMINI_FALLBACK_CHAIN = [
+    {"model": "gemini-3.8-flash", "retries": 3, "pause": 20},
+    {"model": "gemini-3.7-flash", "retries": 3, "pause": 20},
+    {"model": "gemini-3.6-flash", "retries": 3, "pause": 20},
+    {"model": "gemini-3.5-flash", "retries": 3, "pause": 20},
+    {"model": "gemini-3-flash-preview", "retries": 2, "pause": 20},
+    {"model": "gemini-3.5-flash-lite", "retries": 2, "pause": 20},
+    {"model": "gemini-3.1-flash-lite", "retries": 2, "pause": 20},
+]
+
+# Allow overriding the primary model via GEMINI_PRIMARY_MODEL while maintaining the fallback chain
+GEMINI_PRIMARY_MODEL = os.getenv("GEMINI_PRIMARY_MODEL", "").strip()
+if GEMINI_PRIMARY_MODEL:
+    existing_tier = next((tier for tier in GEMINI_FALLBACK_CHAIN if tier["model"] == GEMINI_PRIMARY_MODEL), None)
+    retries = existing_tier["retries"] if existing_tier else 3
+    pause = existing_tier["pause"] if existing_tier else 20
+    GEMINI_FALLBACK_CHAIN = [tier for tier in GEMINI_FALLBACK_CHAIN if tier["model"] != GEMINI_PRIMARY_MODEL]
+    GEMINI_FALLBACK_CHAIN.insert(0, {"model": GEMINI_PRIMARY_MODEL, "retries": retries, "pause": pause})
+
+GEMINI_MODEL = GEMINI_FALLBACK_CHAIN[0]["model"]
 
 # ── Security & Web Service ──────────────────────────────────────────────────
 API_SECRET_KEY = os.getenv("API_SECRET_KEY", "").strip()
