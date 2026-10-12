@@ -265,6 +265,18 @@ def get_job_status(job_id: str):
     purge_expired_jobs()
     job = JOBS.get(job_id)
     if not job:
+        # Check if video was rendered and still exists on disk
+        video_file = JOBS_DIR / job_id / "final_video.mp4"
+        if video_file.exists():
+            return {
+                "job_id": job_id,
+                "status": "completed",
+                "progress": 100,
+                "step": "finished",
+                "video_size_mb": round(video_file.stat().st_size / (1024 * 1024), 2),
+                "download_video_url": f"/api/download/{job_id}/video",
+                "download_thumbnail_url": f"/api/download/{job_id}/thumbnail"
+            }
         raise HTTPException(status_code=404, detail="Job not found")
 
     res = {
@@ -287,11 +299,20 @@ def get_job_status(job_id: str):
 @app.get("/api/download/{job_id}/video", dependencies=[Depends(verify_api_key)])
 def download_video(job_id: str):
     """Serves the final 1080p MP4 subtitled video."""
+    # Check if video exists directly on disk in job directory
+    video_file = JOBS_DIR / job_id / "final_video.mp4"
+    if video_file.exists():
+        return FileResponse(
+            video_file,
+            media_type="video/mp4",
+            filename=f"Mielen_Voima_{job_id}.mp4"
+        )
+
     job = JOBS.get(job_id)
     if not job or job["status"] != "completed":
         raise HTTPException(status_code=404, detail="Video not ready or job not found")
 
-    p = Path(job["video_path"])
+    p = Path(job.get("video_path", ""))
     if not p.exists():
         raise HTTPException(status_code=404, detail="Video file missing on disk")
 
