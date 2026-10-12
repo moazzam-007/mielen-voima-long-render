@@ -13,6 +13,7 @@ from typing import List, Dict, Any, Optional
 from config import (
     logger,
     GEMINI_API_KEY,
+    OPENROUTER_API_KEY,
     GEMINI_FALLBACK_CHAIN,
     GEMINI_MODEL,
     STYLE_PREFIX,
@@ -142,11 +143,6 @@ def split_and_generate_prompts(
     if not fallback_chain:
         raise ValueError("GEMINI_FALLBACK_CHAIN is empty!")
 
-    headers = {
-        "x-goog-api-key": GEMINI_API_KEY,
-        "Content-Type": "application/json",
-    }
-
     user_message = (
         f"Tässä on videon TÄYSI suomenkielinen käsikirjoitus. "
         f"Jaa se kronologisesti 35-45 luonnolliseen kohtaukseen ja luo jokaiselle kohtaukselle "
@@ -154,23 +150,8 @@ def split_and_generate_prompts(
         f"=== KÄSIKIRJOITUS ===\n{script_text.strip()}\n=== KÄSIKIRJOITUKSEN LOPPU ==="
     )
 
-    payload = {
-        "system_instruction": {
-            "parts": [{"text": SYSTEM_PROMPT}]
-        },
-        "contents": [
-            {
-                "parts": [{"text": user_message}]
-            }
-        ],
-        "generationConfig": {
-            "response_mime_type": "application/json",
-            "maxOutputTokens": 16384
-        }
-    }
-
     logger.info(
-        f"Starting Gemini scene chunking & prompt generation across {len(fallback_chain)} fallback tiers "
+        f"Starting multi-provider scene chunking & prompt generation across {len(fallback_chain)} fallback tiers "
         f"(Primary: {fallback_chain[0]['model']})..."
     )
 
@@ -178,19 +159,69 @@ def split_and_generate_prompts(
 
     for tier_idx, tier in enumerate(fallback_chain):
         model = tier.get("model", "")
-        max_retries = tier.get("retries", 3)
-        pause = tier.get("pause", 20)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+        provider = tier.get("provider", "openrouter" if "/" in model else "google")
+        max_retries = tier.get("retries", 2)
+        pause = tier.get("pause", 15)
+        max_output_tokens = tier.get("max_output_tokens", 16384)
+        thinking_level = tier.get("thinking_level")
+
+        if provider == "openrouter" and not OPENROUTER_API_KEY:
+            logger.warning(
+                f"[Tier {tier_idx + 1}/{len(fallback_chain)}] Skipping OpenRouter model {model} "
+                "because OPENROUTER_API_KEY is not configured."
+            )
+            continue
 
         logger.info(
-            f"[Tier {tier_idx + 1}/{len(fallback_chain)}] Engaging model {model} "
+            f"[Tier {tier_idx + 1}/{len(fallback_chain)}] Engaging {provider.upper()} model {model} "
             f"(max retries: {max_retries}, pause: {pause}s)..."
         )
 
         for attempt in range(max_retries):
             t0 = time.time()
             try:
-                r = requests.post(url, headers=headers, json=payload, timeout=65)
+                if provider == "openrouter":
+                    url = "https://openrouter.ai/api/v1/chat/completions"
+                    headers = {
+                        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+                        "HTTP-Referer": "https://mielenvoima.youtube.internal",
+                        "X-Title": "Mielen Voima Production Engine",
+                        "Content-Type": "application/json"
+                    }
+                    payload = {
+                        "model": model,
+                        "messages": [
+                            {"role": "system", "content": SYSTEM_PROMPT},
+                            {"role": "user", "content": user_message}
+                        ],
+                        "response_format": {"type": "json_object"},
+                        "temperature": 0.3,
+                        "max_tokens": max_output_tokens
+                    }
+                else:
+                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+                    headers = {
+                        "x-goog-api-key": GEMINI_API_KEY,
+                        "Content-Type": "application/json",
+                    }
+                    payload = {
+                        "system_instruction": {
+                            "parts": [{"text": SYSTEM_PROMPT}]
+                        },
+                        "contents": [
+                            {
+                                "parts": [{"text": user_message}]
+                            }
+                        ],
+                        "generationConfig": {
+                            "response_mime_type": "application/json",
+                            "maxOutputTokens": max_output_tokens
+                        }
+                    }
+                    if thinking_level:
+                        payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": thinking_level}
+
+                r = requests.post(url, headers=headers, json=payload, timeout=75)
                 elapsed = time.time() - t0
                 logger.info(f"Model {model} Attempt {attempt + 1}/{max_retries}: Status {r.status_code} in {elapsed:.2f}s")
 
@@ -206,46 +237,56 @@ def split_and_generate_prompts(
                             time.sleep(pause)
                         continue
 
-                    candidates = data.get("candidates")
-                    if not candidates:
-                        logger.warning(
-                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} returned no candidates: {str(data)[:300]} "
-                            f"(safety blocked or empty). Pausing {pause}s before retry..."
-                        )
-                        if attempt < max_retries - 1:
-                            time.sleep(pause)
-                        continue
+                    if provider == "openrouter":
+                        choices = data.get("choices")
+                        if not choices:
+                            logger.warning(f"[WARNING] OpenRouter model {model} returned no choices: {data}")
+                            if attempt < max_retries - 1:
+                                time.sleep(pause)
+                            continue
+                        raw_text = choices[0].get("message", {}).get("content", "").strip()
+                    else:
+                        candidates = data.get("candidates")
+                        if not candidates:
+                            logger.warning(
+                                f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} returned no candidates: {str(data)[:300]} "
+                                f"(safety blocked or empty). Pausing {pause}s before retry..."
+                            )
+                            if attempt < max_retries - 1:
+                                time.sleep(pause)
+                            continue
 
-                    candidate = candidates[0]
-                    finish_reason = candidate.get("finishReason", "")
-                    if finish_reason == "MAX_TOKENS":
+                        candidate = candidates[0]
+                        finish_reason = candidate.get("finishReason", "")
+                        if finish_reason == "MAX_TOKENS":
+                            logger.warning(
+                                f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with finishReason: MAX_TOKENS "
+                                f"(output token limit exceeded). Pausing {pause}s before retry..."
+                            )
+                            if attempt < max_retries - 1:
+                                time.sleep(pause)
+                            continue
+                        elif finish_reason and finish_reason not in ("STOP", ""):
+                            logger.warning(
+                                f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with finishReason: {finish_reason}. "
+                                f"Pausing {pause}s before retry..."
+                            )
+                            if attempt < max_retries - 1:
+                                time.sleep(pause)
+                            continue
+
+                        parts = candidate.get("content", {}).get("parts", [])
+                        raw_text = "".join(p.get("text", "") for p in parts if "text" in p).strip()
+
+                    if not raw_text:
                         logger.warning(
-                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with finishReason: MAX_TOKENS "
-                            f"(output token limit exceeded). Pausing {pause}s before retry..."
-                        )
-                        if attempt < max_retries - 1:
-                            time.sleep(pause)
-                        continue
-                    elif finish_reason and finish_reason not in ("STOP", ""):
-                        logger.warning(
-                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} failed with finishReason: {finish_reason}. "
+                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} returned empty text content. "
                             f"Pausing {pause}s before retry..."
                         )
                         if attempt < max_retries - 1:
                             time.sleep(pause)
                         continue
 
-                    parts = candidate.get("content", {}).get("parts", [])
-                    if not parts or "text" not in parts[0]:
-                        logger.warning(
-                            f"[WARNING] Model {model} attempt {attempt + 1}/{max_retries} response missing text parts. "
-                            f"Pausing {pause}s before retry..."
-                        )
-                        if attempt < max_retries - 1:
-                            time.sleep(pause)
-                        continue
-
-                    raw_text = parts[0]["text"].strip()
                     if raw_text.startswith("```"):
                         raw_text = re.sub(r"^```(?:json)?\s*", "", raw_text)
                         raw_text = re.sub(r"\s*```$", "", raw_text)

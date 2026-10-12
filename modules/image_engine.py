@@ -39,7 +39,7 @@ def call_flux_klein_api(
     timeout: int = 60
 ) -> bytes:
     """
-    Calls Cloudflare AI FLUX.2 [klein] 4B via standard JSON payload.
+    Calls Cloudflare AI FLUX.2 [klein] 4B via multipart/form-data payload.
     Returns raw image bytes.
     """
     account_id = account["account_id"]
@@ -48,21 +48,30 @@ def call_flux_klein_api(
 
     headers = {
         "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
     }
-    payload = {"prompt": prompt, "steps": 4}
+    # FLUX.2 [klein] 4B strictly requires multipart/form-data with fixed 4 steps
+    files = {
+        "prompt": (None, prompt),
+        "width": (None, "1024"),
+        "height": (None, "1024"),
+    }
 
-    response = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    response = requests.post(url, headers=headers, files=files, timeout=timeout)
 
     if response.status_code != 200:
         raise RuntimeError(f"Cloudflare API Error ({response.status_code}): {response.text[:300]}")
 
-    result_json = response.json()
-    img_b64 = result_json.get("result", {}).get("image")
-    if not img_b64:
-        raise ValueError(f"No image data returned in Cloudflare response: {result_json}")
+    content_type = response.headers.get("Content-Type", "")
+    if "application/json" in content_type:
+        result_json = response.json()
+        img_b64 = result_json.get("result", {}).get("image")
+        if not img_b64 and isinstance(result_json.get("result"), str):
+            img_b64 = result_json["result"]
+        if not img_b64:
+            raise ValueError(f"No image data returned in Cloudflare response: {result_json}")
+        return base64.b64decode(img_b64)
 
-    return base64.b64decode(img_b64)
+    return response.content
 
 def save_normalized_png(img_bytes: bytes, output_path: Path) -> None:
     """Decodes raw bytes (JPEG or PNG) and saves a true RGB PNG with crisp whiteboard contrast."""

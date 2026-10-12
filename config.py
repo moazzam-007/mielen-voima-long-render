@@ -62,27 +62,79 @@ if not CF_ACCOUNTS:
 
 CF_MODEL = "@cf/black-forest-labs/flux-2-klein-4b"
 
-# ── Gemini API Credentials & Cascading Fallback Chain ────────────────────────
+# ── LLM Credentials & Cascading Fallback Chain (Google AI Studio + OpenRouter) ─
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
 
 GEMINI_FALLBACK_CHAIN = [
-    {"model": "gemini-3.8-flash", "retries": 3, "pause": 20},
-    {"model": "gemini-3.7-flash", "retries": 3, "pause": 20},
-    {"model": "gemini-3.6-flash", "retries": 3, "pause": 20},
-    {"model": "gemini-3.5-flash", "retries": 3, "pause": 20},
-    {"model": "gemini-3-flash-preview", "retries": 2, "pause": 20},
-    {"model": "gemini-3.5-flash-lite", "retries": 2, "pause": 20},
-    {"model": "gemini-3.1-flash-lite", "retries": 2, "pause": 20},
+    {
+        "model": "gemini-3.5-flash-lite",
+        "provider": "google",
+        "retries": 2,
+        "pause": 15,
+        "thinking_level": "HIGH",
+        "max_output_tokens": 16384,
+    },
+    {
+        "model": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "provider": "openrouter",
+        "retries": 2,
+        "pause": 5,
+        "max_output_tokens": 16384,
+    },
+    {
+        "model": "nvidia/nemotron-3-super-120b-a12b:free",
+        "provider": "openrouter",
+        "retries": 2,
+        "pause": 5,
+        "max_output_tokens": 16384,
+    },
+    {
+        "model": "gemini-3-flash-preview",
+        "provider": "google",
+        "retries": 2,
+        "pause": 15,
+        "max_output_tokens": 16384,
+    },
+    {
+        "model": "nvidia/nemotron-3.5-lightning:free",
+        "provider": "openrouter",
+        "retries": 2,
+        "pause": 5,
+        "max_output_tokens": 16384,
+    },
+    {
+        "model": "gemma-4-26b-a4b-it",
+        "provider": "google",
+        "retries": 2,
+        "pause": 10,
+        "max_output_tokens": 16384,
+    },
+    {
+        "model": "gemini-3.1-flash-lite",
+        "provider": "google",
+        "retries": 2,
+        "pause": 15,
+        "max_output_tokens": 16384,
+    },
 ]
 
 # Allow overriding the primary model via GEMINI_PRIMARY_MODEL while maintaining the fallback chain
 GEMINI_PRIMARY_MODEL = os.getenv("GEMINI_PRIMARY_MODEL", "").strip()
 if GEMINI_PRIMARY_MODEL:
     existing_tier = next((tier for tier in GEMINI_FALLBACK_CHAIN if tier["model"] == GEMINI_PRIMARY_MODEL), None)
-    retries = existing_tier["retries"] if existing_tier else 3
-    pause = existing_tier["pause"] if existing_tier else 20
-    GEMINI_FALLBACK_CHAIN = [tier for tier in GEMINI_FALLBACK_CHAIN if tier["model"] != GEMINI_PRIMARY_MODEL]
-    GEMINI_FALLBACK_CHAIN.insert(0, {"model": GEMINI_PRIMARY_MODEL, "retries": retries, "pause": pause})
+    if existing_tier:
+        GEMINI_FALLBACK_CHAIN = [tier for tier in GEMINI_FALLBACK_CHAIN if tier["model"] != GEMINI_PRIMARY_MODEL]
+        GEMINI_FALLBACK_CHAIN.insert(0, existing_tier)
+    else:
+        provider = "openrouter" if "/" in GEMINI_PRIMARY_MODEL else "google"
+        GEMINI_FALLBACK_CHAIN.insert(0, {
+            "model": GEMINI_PRIMARY_MODEL,
+            "provider": provider,
+            "retries": 2,
+            "pause": 15,
+            "max_output_tokens": 16384,
+        })
 
 GEMINI_MODEL = GEMINI_FALLBACK_CHAIN[0]["model"]
 
