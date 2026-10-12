@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+.env
+.git
+.gitignore
+jobs/
+output/
+temp/
+*.mp4
+*.mp3
+*.png
+*.jpg

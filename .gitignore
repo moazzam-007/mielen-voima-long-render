@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+env/
+jobs/
+output/
+temp/
+*.mp4
+*.mp3
+*.png
+*.jpg
+test_output/
+.DS_Store

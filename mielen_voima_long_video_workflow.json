@@ -1,0 +1,800 @@
+{
+  "name": "Mielen Voima - Daily Long Video Automation (1080p + Thumbnail)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 19 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node-trigger-daily",
+      "name": "⏰ Daily Schedule Trigger (19:00 Helsinki)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -1600,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.healthCheckAttempts = 0;\nstaticData.pollAttempts = 0;\nreturn $input.all();"
+      },
+      "id": "node-reset-counters",
+      "name": "🔁 Reset Poll Counters",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1380,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://mielen-voima-long-video-engine.onrender.com/health",
+        "options": {
+          "timeout": 45000
+        }
+      },
+      "id": "node-wake-render",
+      "name": "🔔 Wake Render Engine (GET /health)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1160,
+        400
+      ],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 45,
+        "unit": "seconds"
+      },
+      "id": "node-wait-spinup",
+      "name": "⏳ Wait for Render Spin-up (45s)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -940,
+        400
+      ],
+      "webhookId": "0d03068d-14a3-4890-8b15-3463bbc271c7"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "13ZSBJQrevEo2lJqZ_LoTLyJ_6sEKjHFwhauqmHTamoc",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1374005491,
+          "mode": "list"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Status",
+              "lookupValue": "pending"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node-sheet-get",
+      "name": "📊 Get Today Long Video Script from Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -720,
+        400
+      ],
+      "alwaysOutputData": true,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ew6mItBZu7P6dspU",
+          "name": "Google Sheets account 100 account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $input.all().map(i => i.json).filter(r => r && Object.keys(r).length > 0);\nif (rows.length === 0) {\n  throw new Error(\"Mielen Voima: Koi pending long video script nahi bacha Google Sheet me!\");\n}\nconst row = rows[0]; // Take today's pending row\nconst dayLabel = row.Day || '?';\n\n// Validation: mandatory fields must exist, no silent sample defaults\nconst scriptText = String(row.Script || row.Full_Script || row.Content || '').trim();\nif (!scriptText || scriptText.length < 50) {\n  throw new Error(`Mielen Voima: Day ${dayLabel} script is missing or too short in Sheet!`);\n}\nconst title = String(row.Title || '').trim();\nif (!title) {\n  throw new Error(`Mielen Voima: Day ${dayLabel} Title is empty in Google Sheet!`);\n}\nif (title.length > 100) {\n  throw new Error(`Mielen Voima: Day ${dayLabel} Title is ${title.length} chars (YouTube max 100)!`);\n}\nconst hookTop = String(row.Hook_Top || '').trim();\nconst hookHighlight = String(row.Hook_Highlight || '').trim();\nif (!hookTop || !hookHighlight) {\n  throw new Error(`Mielen Voima: Day ${dayLabel} Hook_Top or Hook_Highlight is empty in Google Sheet!`);\n}\nconst rowId = Number(row.row_number);\nif (!Number.isInteger(rowId) || rowId < 2) {\n  throw new Error(`Mielen Voima: Missing or invalid row_number (${row.row_number}) for Sheet update!`);\n}\n\nreturn [{\n  json: {\n    day: row.Day || null,\n    title: title,\n    script: scriptText,\n    hook_top: hookTop,\n    hook_highlight: hookHighlight,\n    tags: String(row.Tags || \"älykkyys, psykologia, yliälykkyys, mielen voima, stoalaisuus, filosofia\"),\n    description: String(row.Description || \"Tilaa @Mielen_Voima saadaksesi syvällistä psykologiaa ja mielen selkeyttä viikoittain.\") + \"\\n\\n#mielenvoima #psykologia #älykkyys\",\n    sheet_row_id: rowId\n  }\n}];"
+      },
+      "id": "node-prepare-payload",
+      "name": "📝 Prepare Render Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -500,
+        400
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://mielen-voima-long-video-engine.onrender.com/api/generate-long-video",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "mielen_voima_long_2026"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"script\": {{ JSON.stringify($json.script) }},\n  \"title\": {{ JSON.stringify($json.title) }},\n  \"hook_top\": {{ JSON.stringify($json.hook_top) }},\n  \"hook_highlight\": {{ JSON.stringify($json.hook_highlight) }}\n}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "node-dispatch-render",
+      "name": "🚀 Dispatch to Render Engine (/api/generate-long-video)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -280,
+        400
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 90,
+        "unit": "seconds"
+      },
+      "id": "node-wait-initial",
+      "name": "⏳ Initial Render Wait (90s)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -60,
+        400
+      ],
+      "webhookId": "ff0259a6-37ee-42b6-bf11-fab54bdfbc4f"
+    },
+    {
+      "parameters": {
+        "url": "=https://mielen-voima-long-video-engine.onrender.com/api/status/{{ $('🚀 Dispatch to Render Engine (/api/generate-long-video)').first().json.job_id }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "mielen_voima_long_2026"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "node-poll-status",
+      "name": "📊 Poll Render Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        160,
+        400
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const staticData = $getWorkflowStaticData('global');\nstaticData.pollAttempts = (staticData.pollAttempts || 0) + 1;\n\nconst MAX_POLLS = 55; // 55 x 30s = ~27.5 mins buffer for 4-5 min long videos\nconst resp = $input.first().json;\n\nlet outcome;\nif (resp.status === \"completed\") {\n  outcome = \"completed\";\n} else if ([\"failed\", \"error\", \"cancelled\"].includes(resp.status)) {\n  outcome = \"failed\";\n} else if (staticData.pollAttempts >= MAX_POLLS) {\n  outcome = \"timeout\";\n} else {\n  outcome = \"retry\";\n}\n\nreturn [{\n  json: {\n    ...resp,\n    pollAttempt: staticData.pollAttempts,\n    outcome: outcome\n  }\n}];"
+      },
+      "id": "node-eval-poll",
+      "name": "🧮 Evaluate Long Render Status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        380,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "outcome-completed",
+              "leftValue": "={{ $json.outcome }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-if-completed",
+      "name": "❓ Is Long Video Render Complete?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        600,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "outcome-failed",
+              "leftValue": "={{ $json.outcome }}",
+              "rightValue": "failed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "outcome-timeout",
+              "leftValue": "={{ $json.outcome }}",
+              "rightValue": "timeout",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "id": "node-if-abort",
+      "name": "❓ Should We Abort? (Failed or Timed Out)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        820,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "timeInterval",
+        "amount": 30,
+        "unit": "seconds"
+      },
+      "id": "node-poll-wait",
+      "name": "⏳ Poll Wait Loop (30s)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1040,
+        700
+      ],
+      "webhookId": "08892003-aef7-4ea4-8cdd-d46080e6bce0"
+    },
+    {
+      "parameters": {
+        "chatId": "1306188611",
+        "text": "=❌ Mielen Voima: Long Video Render Failed!\n\n📌 Reason: {{ $json.outcome === \"failed\" ? \"Render reported status: FAILED (\" + (typeof $json.error === \"object\" ? JSON.stringify($json.error) : ($json.error || \"Unknown error\")) + \")\" : \"Poll timeout after \" + $json.pollAttempt + \" attempts (~\" + Math.round($json.pollAttempt / 2) + \" mins)\" }}\nJob ID: {{ $json.job_id || \"unknown\" }}\n⏰ {{ $now.setZone(\"Asia/Kolkata\").toFormat(\"HH:mm\") }} IST",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "node-tg-fail",
+      "name": "📨 Telegram - Long Render Failed Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1040,
+        500
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "NFRtoAZzCQgOlUda",
+          "name": "html to imag bot render puptr"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://mielen-voima-long-video-engine.onrender.com{{ $json.download_video_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "mielen_voima_long_2026"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 180000
+        }
+      },
+      "id": "node-dl-video",
+      "name": "⬇️ Download 1080p MP4 Video",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        820,
+        260
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "resource": "video",
+        "operation": "upload",
+        "title": "={{ $('📝 Prepare Render Payload').first().json.title }}",
+        "regionCode": "FI",
+        "categoryId": "27",
+        "options": {
+          "defaultLanguage": "fi",
+          "description": "={{ $('📝 Prepare Render Payload').first().json.description }}",
+          "notifySubscribers": true,
+          "privacyStatus": "public",
+          "selfDeclaredMadeForKids": false,
+          "tags": "={{ $('📝 Prepare Render Payload').first().json.tags }}"
+        }
+      },
+      "id": "node-yt-upload-video",
+      "name": "🎬 Upload Long Video to YouTube",
+      "type": "n8n-nodes-base.youTube",
+      "typeVersion": 1,
+      "position": [
+        1040,
+        260
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "kr3p86tvnD15ES0g",
+          "name": "finland channel power of mind"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://mielen-voima-long-video-engine.onrender.com{{ $('🧮 Evaluate Long Render Status').first().json.download_thumbnail_url }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-API-Key",
+              "value": "mielen_voima_long_2026"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "id": "node-dl-thumb",
+      "name": "⬇️ Download 1280x720 Thumbnail PNG",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1260,
+        260
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 5000,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId={{ $('🎬 Upload Long Video to YouTube').first().json.id }}&uploadType=media",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "youTubeOAuth2Api",
+        "sendBody": true,
+        "contentType": "binaryData",
+        "inputDataFieldName": "data",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "node-yt-upload-thumb",
+      "name": "🖼️ Upload Custom Thumbnail to YouTube (OAuth)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1480,
+        260
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "youTubeOAuth2Api": {
+          "id": "kr3p86tvnD15ES0g",
+          "name": "finland channel power of mind"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "13ZSBJQrevEo2lJqZ_LoTLyJ_6sEKjHFwhauqmHTamoc",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1374005491,
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Status": "published",
+            "row_number": "={{ $('📝 Prepare Render Payload').first().json.sheet_row_id }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ]
+        }
+      },
+      "id": "node-sheet-update",
+      "name": "📊 Mark Google Sheet as Published",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1700,
+        260
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "ew6mItBZu7P6dspU",
+          "name": "Google Sheets account 100 account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "1306188611",
+        "text": "=🎉 Mielen Voima: Daily Long Video Published!\n\n🎬 Title: {{ $('📝 Prepare Render Payload').first().json.title }}\n⏱ Duration: {{ $('🧮 Evaluate Long Render Status').first().json.duration_seconds }}s (~{{ Math.round($('🧮 Evaluate Long Render Status').first().json.duration_seconds / 60) }} min)\n📦 Size: {{ $('🧮 Evaluate Long Render Status').first().json.video_size_mb }} MB\n🔗 YouTube Link: https://youtu.be/{{ $('🎬 Upload Long Video to YouTube').first().json.id }}\n\n{{ $('🖼️ Upload Custom Thumbnail to YouTube (OAuth)').first().json.error ? \"⚠️ Thumbnail upload FAILED - set it manually in YouTube Studio (check: verified channel, PNG under 2 MB)\" : \"Thumbnail uploaded successfully! ✅\" }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "node-tg-success",
+      "name": "📨 Telegram - Long Video Published Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1920,
+        260
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "NFRtoAZzCQgOlUda",
+          "name": "html to imag bot render puptr"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "1306188611",
+        "text": "=❌ Mielen Voima: Long Video Pipeline Error!\n\n📌 Error: {{ typeof $json.error === \"object\" ? ($json.error.message || JSON.stringify($json.error)) : ($json.error || \"Unknown error\") }}\n🔗 Execution ID: {{ $execution.id }}\n🎬 Video uploaded this run: {{ (() => { try { return \"https://youtu.be/\" + $('🎬 Upload Long Video to YouTube').first().json.id; } catch (e) { return \"no\"; } })() }}\n⏰ {{ $now.setZone(\"Asia/Kolkata\").toFormat(\"HH:mm\") }} IST",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "node-tg-error",
+      "name": "📨 Telegram - Pipeline Error Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        -60,
+        800
+      ],
+      "credentials": {
+        "telegramApi": {
+          "id": "NFRtoAZzCQgOlUda",
+          "name": "html to imag bot render puptr"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "⏰ Daily Schedule Trigger (19:00 Helsinki)": {
+      "main": [
+        [
+          {
+            "node": "🔁 Reset Poll Counters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔁 Reset Poll Counters": {
+      "main": [
+        [
+          {
+            "node": "🔔 Wake Render Engine (GET /health)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🔔 Wake Render Engine (GET /health)": {
+      "main": [
+        [
+          {
+            "node": "⏳ Wait for Render Spin-up (45s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏳ Wait for Render Spin-up (45s)": {
+      "main": [
+        [
+          {
+            "node": "📊 Get Today Long Video Script from Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Get Today Long Video Script from Sheet": {
+      "main": [
+        [
+          {
+            "node": "📝 Prepare Render Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📨 Telegram - Pipeline Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📝 Prepare Render Payload": {
+      "main": [
+        [
+          {
+            "node": "🚀 Dispatch to Render Engine (/api/generate-long-video)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📨 Telegram - Pipeline Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🚀 Dispatch to Render Engine (/api/generate-long-video)": {
+      "main": [
+        [
+          {
+            "node": "⏳ Initial Render Wait (90s)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📨 Telegram - Pipeline Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏳ Initial Render Wait (90s)": {
+      "main": [
+        [
+          {
+            "node": "📊 Poll Render Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Poll Render Status": {
+      "main": [
+        [
+          {
+            "node": "🧮 Evaluate Long Render Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🧮 Evaluate Long Render Status": {
+      "main": [
+        [
+          {
+            "node": "❓ Is Long Video Render Complete?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "❓ Is Long Video Render Complete?": {
+      "main": [
+        [
+          {
+            "node": "⬇️ Download 1080p MP4 Video",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "❓ Should We Abort? (Failed or Timed Out)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "❓ Should We Abort? (Failed or Timed Out)": {
+      "main": [
+        [
+          {
+            "node": "📨 Telegram - Long Render Failed Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "⏳ Poll Wait Loop (30s)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⏳ Poll Wait Loop (30s)": {
+      "main": [
+        [
+          {
+            "node": "📊 Poll Render Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⬇️ Download 1080p MP4 Video": {
+      "main": [
+        [
+          {
+            "node": "🎬 Upload Long Video to YouTube",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📨 Telegram - Pipeline Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🎬 Upload Long Video to YouTube": {
+      "main": [
+        [
+          {
+            "node": "⬇️ Download 1280x720 Thumbnail PNG",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📨 Telegram - Pipeline Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "⬇️ Download 1280x720 Thumbnail PNG": {
+      "main": [
+        [
+          {
+            "node": "🖼️ Upload Custom Thumbnail to YouTube (OAuth)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "🖼️ Upload Custom Thumbnail to YouTube (OAuth)": {
+      "main": [
+        [
+          {
+            "node": "📊 Mark Google Sheet as Published",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "📊 Mark Google Sheet as Published": {
+      "main": [
+        [
+          {
+            "node": "📨 Telegram - Long Video Published Alert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "📨 Telegram - Pipeline Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Helsinki"
+  }
+}
