@@ -138,7 +138,7 @@ return {
                 "parameters": [
                     {
                         "name": "X-API-Key",
-                        "value": "mielen_voima_long_2026"
+                        "value": "your_api_secret_key_here"
                     }
                 ]
             },
@@ -179,7 +179,7 @@ return {
                 "parameters": [
                     {
                         "name": "X-API-Key",
-                        "value": "mielen_voima_long_2026"
+                        "value": "your_api_secret_key_here"
                     }
                 ]
             },
@@ -300,7 +300,7 @@ return {
                 "parameters": [
                     {
                         "name": "X-API-Key",
-                        "value": "mielen_voima_long_2026"
+                        "value": "your_api_secret_key_here"
                     }
                 ]
             },
@@ -327,7 +327,7 @@ return {
                 "parameters": [
                     {
                         "name": "X-API-Key",
-                        "value": "mielen_voima_long_2026"
+                        "value": "your_api_secret_key_here"
                     }
                 ]
             },

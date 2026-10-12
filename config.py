@@ -67,16 +67,12 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = "gemini-3.8-flash"
 
 # ── Security & Web Service ──────────────────────────────────────────────────
-_raw_secret = os.getenv("API_SECRET_KEY", "")
-if not _raw_secret or not _raw_secret.strip():
+API_SECRET_KEY = os.getenv("API_SECRET_KEY", "").strip()
+if not API_SECRET_KEY:
     logger.warning(
-        "API_SECRET_KEY is not set — falling back to default "
-        "'mielen_voima_long_2026'. Set API_SECRET_KEY in the environment "
-        "to match the n8n caller."
+        "API_SECRET_KEY is not set in environment variables! "
+        "Set API_SECRET_KEY in production to enforce X-API-Key authentication."
     )
-    API_SECRET_KEY = "mielen_voima_long_2026"
-else:
-    API_SECRET_KEY = _raw_secret.strip()
 PORT = int(os.getenv("PORT", "10000"))
 
 # ── Voice & Audio Settings ──────────────────────────────────────────────────
