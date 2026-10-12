@@ -12,5 +12,3 @@ temp/
 *.jpg
 test_output/
 .DS_Store
-*.json
-create_n8n_workflow.py
