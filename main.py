@@ -53,7 +53,7 @@ JOBS: Dict[str, Dict[str, Any]] = {}
 # ── Concurrency Guard & Disk Hygiene (512MB RAM target) ────────────────────
 RENDER_SLOT_LOCK = threading.Lock()
 MAX_CONCURRENT_JOBS = 1
-JOB_TTL_SECONDS = 1800  # 30 min retention for completed/failed jobs
+JOB_TTL_SECONDS = 3600  # 60 min (1 hour) retention for completed/failed jobs
 
 
 def acquire_render_slot() -> bool:
@@ -205,7 +205,8 @@ def run_pipeline_worker(job_id: str, req: GenerateLongVideoRequest):
         job["error"] = str(e)
         job["progress"] = 0
         job["completed_at"] = time.time()
-        shutil.rmtree(job_dir, ignore_errors=True)
+        # Note: Do NOT immediately delete job_dir. Files are retained for JOB_TTL_SECONDS (1 hr)
+        # allowing manual asset recovery without consuming RAM, and purged cleanly by purge_expired_jobs().
     finally:
         release_render_slot()
 
@@ -303,11 +304,20 @@ def download_video(job_id: str):
 @app.get("/api/download/{job_id}/thumbnail", dependencies=[Depends(verify_api_key)])
 def download_thumbnail(job_id: str):
     """Serves the final 1280x720 composite thumbnail."""
+    # Check if thumbnail exists directly on disk in job directory
+    thumb_path = JOBS_DIR / job_id / "thumbnail.png"
+    if thumb_path.exists():
+        return FileResponse(
+            thumb_path,
+            media_type="image/png",
+            filename=f"Thumbnail_{job_id}.png"
+        )
+
     job = JOBS.get(job_id)
     if not job or job["status"] != "completed":
         raise HTTPException(status_code=404, detail="Thumbnail not ready or job not found")
 
-    p = Path(job["thumbnail_path"])
+    p = Path(job.get("thumbnail_path", ""))
     if not p.exists():
         raise HTTPException(status_code=404, detail="Thumbnail file missing on disk")
 

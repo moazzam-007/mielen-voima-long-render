@@ -195,6 +195,11 @@ def split_and_generate_prompts(
                             {"role": "user", "content": user_message}
                         ],
                         "response_format": {"type": "json_object"},
+                        "reasoning": {
+                            "effort": "low",
+                            "exclude": True
+                        },
+                        "plugins": [{"id": "response-healing"}],
                         "temperature": 0.3,
                         "max_tokens": max_output_tokens
                     }
@@ -221,7 +226,8 @@ def split_and_generate_prompts(
                     if thinking_level:
                         payload["generationConfig"]["thinkingConfig"] = {"thinkingLevel": thinking_level}
 
-                r = requests.post(url, headers=headers, json=payload, timeout=75)
+                timeout_sec = 180 if provider == "openrouter" else 90
+                r = requests.post(url, headers=headers, json=payload, timeout=timeout_sec)
                 elapsed = time.time() - t0
                 logger.info(f"Model {model} Attempt {attempt + 1}/{max_retries}: Status {r.status_code} in {elapsed:.2f}s")
 
@@ -244,7 +250,15 @@ def split_and_generate_prompts(
                             if attempt < max_retries - 1:
                                 time.sleep(pause)
                             continue
-                        raw_text = choices[0].get("message", {}).get("content", "").strip()
+                        msg = choices[0].get("message", {})
+                        content_val = msg.get("content")
+                        reasoning_val = msg.get("reasoning")
+                        if content_val is not None and str(content_val).strip():
+                            raw_text = str(content_val).strip()
+                        elif reasoning_val is not None and str(reasoning_val).strip():
+                            raw_text = str(reasoning_val).strip()
+                        else:
+                            raw_text = ""
                     else:
                         candidates = data.get("candidates")
                         if not candidates:

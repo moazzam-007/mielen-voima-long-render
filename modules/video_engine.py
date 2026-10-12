@@ -48,7 +48,7 @@ def render_scene_ts_chunk(
         str(output_ts_path)
     ]
 
-    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=300)
     if res.returncode != 0:
         logger.error(f"FFmpeg chunk error on {output_ts_path.name}:\n{res.stderr[-400:]}")
         raise RuntimeError(f"FFmpeg failed to render {output_ts_path.name}")
@@ -103,7 +103,7 @@ def assemble_long_video(
         "-c", "copy",
         str(raw_mp4)
     ]
-    res_concat = subprocess.run(concat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=600)
+    res_concat = subprocess.run(concat_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=900)
     if res_concat.returncode != 0:
         logger.error(f"FFmpeg concat error:\n{res_concat.stderr[-400:]}")
         raise RuntimeError("FFmpeg concat failed")
@@ -122,7 +122,8 @@ def assemble_long_video(
         str(final_output_path)
     ]
 
-    res_burn = subprocess.run(burn_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=600)
+    # Extra margin wait: 1800s (30 mins) ensures high quality CRF 20 render completes without cutting off
+    res_burn = subprocess.run(burn_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1800)
     if res_burn.returncode != 0:
         logger.error(f"FFmpeg subtitle burn error:\n{res_burn.stderr[-400:]}")
         raise RuntimeError("FFmpeg subtitle burning failed")
