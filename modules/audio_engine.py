@@ -120,6 +120,10 @@ async def generate_all_audio(
         if (i + 1) % 10 == 0 or (i + 1) == len(scenes):
             logger.info(f"  Processed audio {i + 1}/{len(scenes)} scenes")
 
+        # Anti-abuse cooldown: 2s pause between WebSocket connections to prevent 403 blocks
+        if i + 1 < len(scenes):
+            await asyncio.sleep(2.0)
+
     total_duration = sum(s["duration"] for s in scenes)
     logger.info(f"All audio generated! Total video duration: {total_duration:.2f}s ({total_duration/60:.2f} min)")
     return scenes
