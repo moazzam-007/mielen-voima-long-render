@@ -14,3 +14,5 @@ test_output/
 .DS_Store
 create_n8n_workflow.py
 mielen_voima_long_video_workflow.json
+*.txt
+export_codebase_to_txt.py

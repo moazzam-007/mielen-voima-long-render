@@ -70,7 +70,7 @@ async def generate_single_scene_audio(
     scene_id = scene["scene_id"]
     text = scene["spoken_chunk"]
     raw_path = output_dir / f"scene_{scene_id:02d}_raw.mp3"
-    final_path = output_dir / f"scene_{scene_id:02d}.mp3"
+    final_path = output_dir / f"scene_{scene_id:02d}.wav"
 
     # Step 1: Synthesize with Edge TTS (3 attempts, 45s timeout, exp backoff)
     last_err: Exception | None = None
@@ -92,10 +92,10 @@ async def generate_single_scene_audio(
             f"Edge-TTS failed for scene {scene_id} after 3 attempts: {last_err}"
         ) from last_err
 
-    # Step 2: Load, trim leading + trailing silence & save final
+    # Step 2: Load, trim leading + trailing silence & save uncompressed WAV
     audio_seg = AudioSegment.from_file(str(raw_path))
     trimmed_seg = trim_trailing_silence(audio_seg)
-    trimmed_seg.export(str(final_path), format="mp3")
+    trimmed_seg.export(str(final_path), format="wav")
 
     # Clean up raw file
     if raw_path.exists():

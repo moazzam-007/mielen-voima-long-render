@@ -61,6 +61,7 @@ if not CF_ACCOUNTS:
     logger.warning("No Cloudflare credentials found in environment variables!")
 
 CF_MODEL = "@cf/black-forest-labs/flux-2-klein-4b"
+CF_THUMBNAIL_MODEL = os.getenv("CF_THUMBNAIL_MODEL", "@cf/black-forest-labs/flux-2-klein-9b")
 
 # ── LLM Credentials & Cascading Fallback Chain (Google AI Studio + OpenRouter) ─
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
@@ -150,25 +151,29 @@ PORT = int(os.getenv("PORT", "10000"))
 # ── Voice & Audio Settings ──────────────────────────────────────────────────
 VOICE_DEFAULT = "fi-FI-HarriNeural"
 VOICE_RATE = "-2%"
-AUDIO_TRAILING_GAP_MS = 100       # Clean gap between spoken lines
+AUDIO_TRAILING_GAP_MS = 200       # Clean gap between spoken lines (reflective pacing)
 AUDIO_MICRO_FADE_OUT_MS = 15      # Anti-pop fade out
+
+# ── Image Generation Dimensions (Native 16:9 Landscape) ──────────────────────
+IMG_WIDTH = 1280
+IMG_HEIGHT = 720
 
 # ── Prompt Assembly Constants (Boilerplate Injected via Code) ───────────────
 STYLE_PREFIX = (
-    "Minimalist flat 2D black ink doodle on a pure white (#FFFFFF) background, "
-    "thick clean outlines, lots of empty space. Character: a bare stick figure with a "
-    "round white head, two black dot eyes, simple mouth line, thin black line limbs."
+    "Minimalist flat 2D black ink doodle illustration on a pure white (#FFFFFF) background, "
+    "wide 16:9 landscape format, crisp uniform black outlines, generous empty space. Character: a simple "
+    "stick figure with a round white head, two black dot eyes, a simple expressive mouth, and thin black line limbs."
 )
 
 STYLE_SUFFIX = (
-    "all subjects placed in upper 75% of frame, bottom quarter left completely empty "
-    "white canvas for subtitles, clean black doodle line art, flat solid fills, family friendly."
+    "all subjects placed in the upper 75% of the frame, the bottom quarter is an empty "
+    "plain white margin, clean 2D doodle line art, flat solid color accents, uniform flat line weight."
 )
 
 # ── Video & Subtitle Visual Standards ────────────────────────────────────────
 VIDEO_WIDTH = 1920
 VIDEO_HEIGHT = 1080
-VIDEO_FPS = 30
+VIDEO_FPS = 24                    # Optimized for CPU render speed & clean whiteboard animations
 
 # Subtitle Styling: Pure Solid Black, ZERO White Outline, Centered Bottom
 SUBTITLE_STYLE = {

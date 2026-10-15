@@ -5,7 +5,7 @@ services:
     plan: free
     region: frankfurt # Low latency to Europe / Finland
     branch: main
-    autoDeploy: true
+    autoDeploy: false
     healthCheckPath: /health
     envVars:
       - key: CF_ACCOUNT_ID_1
@@ -20,7 +20,13 @@ services:
         sync: false
       - key: CF_API_TOKEN_3
         sync: false
+      - key: CF_THUMBNAIL_MODEL
+        sync: false
       - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GEMINI_PRIMARY_MODEL
         sync: false
       - key: API_SECRET_KEY
         sync: false

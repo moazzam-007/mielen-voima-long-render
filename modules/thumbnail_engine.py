@@ -54,30 +54,30 @@ def create_composite_thumbnail(
     thumb = Image.new("RGB", (canvas_w, canvas_h), THUMB_BG)
     draw = ImageDraw.Draw(thumb)
 
-    # 1. Place the Right-Side Visual
+    # 1. Place the Right-Side Visual (High-CTR 16:9 artwork filling right half)
     if visual_image_path.exists():
         try:
-            vis_img = Image.open(visual_image_path).convert("RGBA")
-            # Target right box: x from 640 to 1240, y centered
-            target_w = 560
-            target_h = 560
-            vis_img.thumbnail((target_w, target_h), Image.Resampling.LANCZOS)
+            from PIL import ImageOps
+            vis_img = Image.open(visual_image_path).convert("RGB")
+            # Fit artwork into a prominent 660x640 right container
+            target_w = 660
+            target_h = 640
+            vis_fitted = ImageOps.fit(vis_img, (target_w, target_h), method=Image.Resampling.LANCZOS)
 
-            # Paste on the right half with plenty of breathing room
-            pos_x = canvas_w - vis_img.width - 50
-            pos_y = (canvas_h - vis_img.height) // 2
-            thumb.paste(vis_img, (pos_x, pos_y), mask=vis_img if vis_img.mode == 'RGBA' else None)
+            pos_x = canvas_w - target_w - 30
+            pos_y = (canvas_h - target_h) // 2
+            thumb.paste(vis_fitted, (pos_x, pos_y))
         except Exception as e:
             logger.warning(f"Could not paste thumbnail visual: {e}")
 
-    # 2. Typography on the Left Side
-    font_top = get_font(72)
-    MAX_TEXT_WIDTH = 540
-    HIGHLIGHT_MIN_FONT = 42
-    HIGHLIGHT_MAX_FONT = 64
+    # 2. Typography on the Left Side (Mobile-Optimized Bold)
+    font_top = get_font(84)
+    MAX_TEXT_WIDTH = 520
+    HIGHLIGHT_MIN_FONT = 46
+    HIGHLIGHT_MAX_FONT = 76
 
-    left_margin = 70
-    start_y = 200
+    left_margin = 60
+    start_y = 180
 
     # Draw hook_top
     if hook_top:
@@ -86,8 +86,7 @@ def create_composite_thumbnail(
     # Draw hook_highlight inside Amber Yellow (#FBBF24) box
     if hook_highlight:
         highlight_text = hook_highlight.upper()
-        # Auto-fit: shrink font from 64 down to 42 until text fits left column
-        # (right-side visual starts at x=670px, so cap width at 540px).
+        # Auto-fit: shrink font from 76 down to 46 until text fits left column
         font_highlight = get_font(HIGHLIGHT_MAX_FONT)
         highlight_size = HIGHLIGHT_MAX_FONT
         bbox = draw.textbbox((0, 0), highlight_text, font=font_highlight)
@@ -101,7 +100,7 @@ def create_composite_thumbnail(
 
         box_padding_x = 24
         box_padding_y = 16
-        box_top = start_y + 110
+        box_top = start_y + 115
         box_left = left_margin
         box_right = box_left + text_w + (box_padding_x * 2)
         box_bottom = box_top + text_h + (box_padding_y * 2)
@@ -121,7 +120,12 @@ def create_composite_thumbnail(
             font=font_highlight
         )
 
-    # 3. Save thumbnail
+    # 3. Outer Border (Protects against blending into YouTube light-theme)
+    BORDER_WIDTH = 4
+    BORDER_COLOR = (229, 231, 235)  # Subtle clean slate border (#E5E7EB)
+    draw.rectangle([(0, 0), (canvas_w - 1, canvas_h - 1)], outline=BORDER_COLOR, width=BORDER_WIDTH)
+
+    # 4. Save thumbnail
     thumb.save(output_path, format="PNG", quality=95)
     logger.info(f"Composite thumbnail generated -> {output_path}")
     return output_path

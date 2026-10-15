@@ -27,9 +27,9 @@ def render_scene_ts_chunk(
     Renders a single scene to a transport stream (.ts) segment.
     Uses minimal memory (<80MB RAM) by processing one short clip at a time.
     """
-    # Video filter: Scale & pad to 1920x1080 with pure white background #FFFFFF
+    # Video filter: Scale & pad to 1920x1080 with pure white background #FFFFFF (Lanczos for crisp doodle lines)
     vf = (
-        f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,"
+        f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease:flags=lanczos,"
         f"pad={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=white,"
         f"format=yuv420p"
     )
@@ -108,25 +108,33 @@ def assemble_long_video(
         logger.error(f"FFmpeg concat error:\n{res_concat.stderr[-400:]}")
         raise RuntimeError("FFmpeg concat failed")
 
-    # Step 3: Burn in ASS Subtitles
+    # Step 3: Burn in ASS Subtitles (Atomic render to .part.mp4 first)
     logger.info(f"Burning in ASS subtitles from {ass_subtitle_path.name}...")
     # Escape path for FFmpeg filter on Windows and Linux
     sub_path_escaped = str(ass_subtitle_path.resolve()).replace("\\", "/").replace(":", "\\:")
+    part_output_path = final_output_path.with_name(f"{final_output_path.stem}.part.mp4")
+
     burn_cmd = [
         "ffmpeg", "-nostdin", "-loglevel", "error", "-y",
         "-i", str(raw_mp4),
         "-vf", f"ass='{sub_path_escaped}'",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-tune", "stillimage",
         "-threads", "1",
         "-c:a", "copy",
-        str(final_output_path)
+        str(part_output_path)
     ]
 
     # Extra margin wait: 1800s (30 mins) ensures high quality CRF 20 render completes without cutting off
     res_burn = subprocess.run(burn_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=1800)
     if res_burn.returncode != 0:
         logger.error(f"FFmpeg subtitle burn error:\n{res_burn.stderr[-400:]}")
+        if part_output_path.exists():
+            part_output_path.unlink()
         raise RuntimeError("FFmpeg subtitle burning failed")
+
+    # Atomic rename: Prevents incomplete/corrupted video download
+    if part_output_path.exists():
+        part_output_path.replace(final_output_path)
 
     # Clean up intermediate raw mp4 and ts directory to save disk space
     if raw_mp4.exists():

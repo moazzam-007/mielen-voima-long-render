@@ -11,6 +11,7 @@ import asyncio
 import logging
 import shutil
 import threading
+import secrets
 from pathlib import Path
 from typing import Dict, Any, Optional
 
@@ -24,11 +25,12 @@ from config import (
     logger,
     JOBS_DIR,
     API_SECRET_KEY,
-    PORT
+    PORT,
+    CF_ACCOUNTS
 )
-from modules.gemini_engine import split_and_generate_prompts
+from modules.gemini_engine import split_and_generate_prompts, generate_thumbnail_prompt
 from modules.audio_engine import generate_all_audio
-from modules.image_engine import generate_all_images
+from modules.image_engine import generate_all_images, generate_thumbnail_image, CloudflareImageRotator
 from modules.thumbnail_engine import create_composite_thumbnail
 from modules.subtitle_engine import generate_ass_subtitles
 from modules.video_engine import assemble_long_video
@@ -97,18 +99,24 @@ def purge_expired_jobs() -> int:
 
 class GenerateLongVideoRequest(BaseModel):
     script: str = Field(..., description="Full Finnish script text (continuous paragraph)")
-    title: Optional[str] = Field("8 Merkkiä Siitä, Että Olet Yliälykäs", description="Video title")
-    hook_top: Optional[str] = Field("8 MERKKIÄ", description="Thumbnail top hook text (2-3 words)")
-    hook_highlight: Optional[str] = Field("OLETKO LIIAN ÄLYKÄS?", description="Thumbnail highlight text (2-3 words)")
+    title: str = Field(..., description="Video title (required for thematic thumbnail generation)")
+    hook_top: Optional[str] = Field(None, description="Optional thumbnail hook top text")
+    hook_highlight: Optional[str] = Field(None, description="Optional thumbnail highlight text")
     webhook_url: Optional[str] = Field(None, description="Optional n8n webhook URL to notify on completion")
 
 def verify_api_key(x_api_key: Optional[str] = Header(None)):
-    if API_SECRET_KEY:
-        if not x_api_key or x_api_key != API_SECRET_KEY:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid or missing X-API-Key header"
-            )
+    """Fail-closed authentication with timing-safe comparison."""
+    if not API_SECRET_KEY:
+        logger.error("API_SECRET_KEY is not configured on the server!")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="API_SECRET_KEY is not configured on the server."
+        )
+    if not x_api_key or not secrets.compare_digest(x_api_key, API_SECRET_KEY):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing X-API-Key header"
+        )
     return True
 
 def run_pipeline_worker(job_id: str, req: GenerateLongVideoRequest):
@@ -122,9 +130,11 @@ def run_pipeline_worker(job_id: str, req: GenerateLongVideoRequest):
     job["status"] = "processing"
     job["progress"] = 5
     job_dir = JOBS_DIR / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
 
     try:
+        # Move mkdir inside try to prevent render slot leak on disk/permission errors
+        job_dir.mkdir(parents=True, exist_ok=True)
+
         # ── Step 1: Gemini Scene Chunking & Prompts (15%) ────────────────────
         job["step"] = "gemini_prompt_generation"
         job["progress"] = 10
@@ -150,13 +160,24 @@ def run_pipeline_worker(job_id: str, req: GenerateLongVideoRequest):
         scenes = generate_all_images(scenes, img_dir)
         job["progress"] = 70
 
-        # ── Step 4: Composite Thumbnail Synthesis (80%) ─────────────────────
+        # ── Step 4: Direct Full-Bleed FLUX.2 Klein 9B Thumbnail (80%) ────────
         job["step"] = "thumbnail_synthesis"
-        logger.info(f"[{job_id}] Starting Step 4: Synthesizing 1280x720 thumbnail...")
-        # Use first scene or representative scene visual for thumbnail
-        key_img = Path(scenes[0]["image_path"])
+        logger.info(f"[{job_id}] Starting Step 4: Generating direct 16:9 full-bleed thumbnail via FLUX.2 Klein 9B...")
         thumb_path = job_dir / "thumbnail.png"
-        create_composite_thumbnail(key_img, req.hook_top, req.hook_highlight, thumb_path)
+
+        # Dedicated Gemini thumbnail prompt + Direct FLUX 9B full-bleed image
+        rotator = CloudflareImageRotator(CF_ACCOUNTS)
+        try:
+            thumb_prompt = generate_thumbnail_prompt(req.title, req.script)
+            logger.info(f"[{job_id}] Dedicated Thumbnail Prompt: {thumb_prompt[:120]}...")
+            success = generate_thumbnail_image(thumb_prompt, thumb_path, rotator)
+            if not success or not thumb_path.exists() or thumb_path.stat().st_size < 5000:
+                raise RuntimeError("FLUX 9B thumbnail generation returned invalid file")
+            logger.info(f"[{job_id}] Full-bleed AI thumbnail generated successfully -> {thumb_path.name}")
+        except Exception as e:
+            logger.warning(f"[{job_id}] Dedicated thumbnail visual failed ({e}); falling back to scene 1.")
+            shutil.copyfile(scenes[0]["image_path"], thumb_path)
+
         job["progress"] = 80
 
         # ── Step 5: ASS Subtitle Generation (85%) ───────────────────────────
@@ -205,6 +226,21 @@ def run_pipeline_worker(job_id: str, req: GenerateLongVideoRequest):
         job["error"] = str(e)
         job["progress"] = 0
         job["completed_at"] = time.time()
+
+        # Optional Failure Webhook Notification to n8n (prevents hanging workflows)
+        if req.webhook_url:
+            try:
+                logger.info(f"[{job_id}] Sending failure webhook to {req.webhook_url}...")
+                fail_payload = {
+                    "job_id": job_id,
+                    "status": "failed",
+                    "title": req.title,
+                    "error": str(e)
+                }
+                requests.post(req.webhook_url, json=fail_payload, timeout=10)
+            except Exception as we:
+                logger.warning(f"[{job_id}] Failure webhook dispatch error: {we}")
+
         # Note: Do NOT immediately delete job_dir. Files are retained for JOB_TTL_SECONDS (1 hr)
         # allowing manual asset recovery without consuming RAM, and purged cleanly by purge_expired_jobs().
     finally:
