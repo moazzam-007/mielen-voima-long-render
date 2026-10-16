@@ -14,12 +14,10 @@ sys.path.append(str(Path(__file__).parent))
 from config import (
     logger,
     CF_ACCOUNTS,
-    GEMINI_API_KEY,
-    THUMB_HIGHLIGHT_BOX
+    GEMINI_API_KEY
 )
 from modules.audio_engine import generate_single_scene_audio
 from modules.image_engine import CloudflareImageRotator, generate_single_image
-from modules.thumbnail_engine import create_composite_thumbnail
 from modules.subtitle_engine import generate_ass_subtitles
 from modules.video_engine import assemble_long_video
 
@@ -63,25 +61,14 @@ async def run_integration_test():
     sample_scene["image_path"] = str(img_path)
     print(f"  -> Generated image: {img_path} ({img_path.stat().st_size / 1024:.1f} KB)")
 
-    # 4. Thumbnail Engine Test
-    print("\n[Test 3/5] Testing 1280x720 Composite Thumbnail...")
-    thumb_path = test_dir / "thumbnail.png"
-    create_composite_thumbnail(
-        img_path,
-        hook_top="8 MERKKIÄ",
-        hook_highlight="OLETKO LIIAN ÄLYKÄS?",
-        output_path=thumb_path
-    )
-    print(f"  -> Generated thumbnail: {thumb_path}")
-
-    # 5. Subtitle Engine Test
-    print("\n[Test 4/5] Testing ASS Subtitles (Solid Black, Outline=0)...")
+    # 4. Subtitle Engine Test
+    print("\n[Test 3/4] Testing ASS Subtitles (Solid Black, Outline=0)...")
     sub_path = test_dir / "subtitles.ass"
     generate_ass_subtitles([sample_scene], sub_path)
     print(f"  -> Generated subtitles: {sub_path}")
 
-    # 6. Video Engine Test (FFmpeg TS Chunk + Concat + Subtitle Burn)
-    print("\n[Test 5/5] Testing FFmpeg Memory-Safe Video Assembly...")
+    # 5. Video Engine Test (FFmpeg TS Chunk + Concat + Subtitle Burn)
+    print("\n[Test 4/4] Testing FFmpeg Memory-Safe Video Assembly...")
     final_video = test_dir / "test_sample_video.mp4"
     assemble_long_video(
         [sample_scene],

@@ -28,10 +28,9 @@ from config import (
     PORT,
     CF_ACCOUNTS
 )
-from modules.gemini_engine import split_and_generate_prompts, generate_thumbnail_prompt
+from modules.gemini_engine import split_and_generate_prompts
 from modules.audio_engine import generate_all_audio
-from modules.image_engine import generate_all_images, generate_thumbnail_image, CloudflareImageRotator
-from modules.thumbnail_engine import create_composite_thumbnail
+from modules.image_engine import generate_all_images, CloudflareImageRotator
 from modules.subtitle_engine import generate_ass_subtitles
 from modules.video_engine import assemble_long_video
 
@@ -160,36 +159,16 @@ def run_pipeline_worker(job_id: str, req: GenerateLongVideoRequest):
         scenes = generate_all_images(scenes, img_dir)
         job["progress"] = 70
 
-        # ── Step 4: Direct Full-Bleed FLUX.2 Klein 9B Thumbnail (80%) ────────
-        job["step"] = "thumbnail_synthesis"
-        logger.info(f"[{job_id}] Starting Step 4: Generating direct 16:9 full-bleed thumbnail via FLUX.2 Klein 9B...")
-        thumb_path = job_dir / "thumbnail.png"
-
-        # Dedicated Gemini thumbnail prompt + Direct FLUX 9B full-bleed image
-        rotator = CloudflareImageRotator(CF_ACCOUNTS)
-        try:
-            thumb_prompt = generate_thumbnail_prompt(req.title, req.script)
-            logger.info(f"[{job_id}] Dedicated Thumbnail Prompt: {thumb_prompt[:120]}...")
-            success = generate_thumbnail_image(thumb_prompt, thumb_path, rotator)
-            if not success or not thumb_path.exists() or thumb_path.stat().st_size < 5000:
-                raise RuntimeError("FLUX 9B thumbnail generation returned invalid file")
-            logger.info(f"[{job_id}] Full-bleed AI thumbnail generated successfully -> {thumb_path.name}")
-        except Exception as e:
-            logger.warning(f"[{job_id}] Dedicated thumbnail visual failed ({e}); falling back to scene 1.")
-            shutil.copyfile(scenes[0]["image_path"], thumb_path)
-
-        job["progress"] = 80
-
-        # ── Step 5: ASS Subtitle Generation (85%) ───────────────────────────
+        # ── Step 4: ASS Subtitle Generation (80%) ───────────────────────────
         job["step"] = "subtitle_generation"
-        logger.info(f"[{job_id}] Starting Step 5: Generating ASS subtitles (Solid Black, Outline=0)...")
+        logger.info(f"[{job_id}] Starting Step 4: Generating ASS subtitles (Solid Black, Outline=0)...")
         sub_path = job_dir / "subtitles.ass"
         generate_ass_subtitles(scenes, sub_path)
-        job["progress"] = 85
+        job["progress"] = 80
 
-        # ── Step 6: FFmpeg TS Chunks & Video Assembly (100%) ─────────────────
+        # ── Step 5: FFmpeg TS Chunks & Video Assembly (100%) ─────────────────
         job["step"] = "video_assembly"
-        logger.info(f"[{job_id}] Starting Step 6: Assembling memory-safe 1080p video...")
+        logger.info(f"[{job_id}] Starting Step 5: Assembling memory-safe 1080p video...")
         final_video_path = job_dir / "final_video.mp4"
         assemble_long_video(scenes, sub_path, job_dir / "work", final_video_path)
 
@@ -198,7 +177,6 @@ def run_pipeline_worker(job_id: str, req: GenerateLongVideoRequest):
         job["step"] = "finished"
         job["progress"] = 100
         job["video_path"] = str(final_video_path)
-        job["thumbnail_path"] = str(thumb_path)
         job["video_size_mb"] = round(final_video_path.stat().st_size / (1024 * 1024), 2)
         job["completed_at"] = time.time()
         logger.info(f"[{job_id}] PIPELINE COMPLETED SUCCESSFULLY! Size: {job['video_size_mb']} MB")
@@ -213,8 +191,7 @@ def run_pipeline_worker(job_id: str, req: GenerateLongVideoRequest):
                     "title": req.title,
                     "duration_seconds": job["duration_seconds"],
                     "video_size_mb": job["video_size_mb"],
-                    "download_video_url": f"/api/download/{job_id}/video",
-                    "download_thumbnail_url": f"/api/download/{job_id}/thumbnail"
+                    "download_video_url": f"/api/download/{job_id}/video"
                 }
                 requests.post(req.webhook_url, json=payload, timeout=10)
             except Exception as e:
@@ -360,8 +337,7 @@ def download_video(job_id: str):
 
 @app.get("/api/download/{job_id}/thumbnail", dependencies=[Depends(verify_api_key)])
 def download_thumbnail(job_id: str):
-    """Serves the final 1280x720 composite thumbnail."""
-    # Check if thumbnail exists directly on disk in job directory
+    """Legacy endpoint: Serves thumbnail if present, else returns 404 (pipeline decoupled)."""
     thumb_path = JOBS_DIR / job_id / "thumbnail.png"
     if thumb_path.exists():
         return FileResponse(
@@ -369,19 +345,9 @@ def download_thumbnail(job_id: str):
             media_type="image/png",
             filename=f"Thumbnail_{job_id}.png"
         )
-
-    job = JOBS.get(job_id)
-    if not job or job["status"] != "completed":
-        raise HTTPException(status_code=404, detail="Thumbnail not ready or job not found")
-
-    p = Path(job.get("thumbnail_path", ""))
-    if not p.exists():
-        raise HTTPException(status_code=404, detail="Thumbnail file missing on disk")
-
-    return FileResponse(
-        p,
-        media_type="image/png",
-        filename=f"Thumbnail_{job_id}.png"
+    raise HTTPException(
+        status_code=404,
+        detail="Thumbnail generation has been decoupled from the render pipeline."
     )
 
 if __name__ == "__main__":
