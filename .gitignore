@@ -18,3 +18,4 @@ mielen_voima_long_video_workflow.json
 export_codebase_to_txt.py
 *.csv
 thumbnail_batches/
+Thumbnail flow.json
